@@ -1,0 +1,292 @@
+#include <BluetoothSerial.h>
+#include <SD.h>
+#include <Wire.h>
+
+#define RTC_ADDR 0x68 // I2C Address for the RTC module
+const int chipSelect = 5; // You can change this to any GPIO pin you like
+#define FILE_APPEND_PLUS "a+"
+const int soilMoisturePin = 4; // Analog pin connected to the soil moisture sensor
+const int ledPin1 = 2; // Digital pin connected to an LED for indicating moisture level
+#define MOTOR_CS_PIN 14 // Chip Select pin for motor
+
+BluetoothSerial SerialBT;
+String accept="Approved";
+String temp="Request";
+String dataReceived,data,dataReceived_1;
+
+File file;
+int function(String temp,String dataReceived);
+void SD_card_write_function(String );
+void SD_card_read_function(void);
+String integer_to_string(int,int,int,int,int,int);
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(14, OUTPUT);
+  pinMode(26, OUTPUT);
+  pinMode(27, OUTPUT);
+
+  pinMode(ledPin1, OUTPUT);//led.......
+
+  digitalWrite(14, HIGH);
+  SerialBT.begin("TEAM_@"); // Set Bluetooth name
+  Serial.println("The device started, now you can pair it with Bluetooth!");
+
+  Wire.begin();
+  ///..If we need to change the time that time you remove comments bellow.///////////////////////////////////////////
+      if (!SD.begin(chipSelect)) {
+          Serial.println("Card Mount Failed");
+          return;
+        }
+      Serial.println("Card Mounted");
+      file = SD.open("/TEAM_A.txt", FILE_APPEND_PLUS);
+        if (!file) {
+          Serial.println("Failed to create file");
+          return;
+        }
+       //setDS1307Time(21, 5, 8, 12, 30, 0); // Example: set to May 8, 2021, 12:30:00
+     
+}
+
+void loop() 
+{
+      int value,soilMoistureValue,t1=0,t2=0,m1=0,m2=0,m3,h1=0,h2=0,h3=0,s1=0,s2=0,s3=0,sw_1=0,sw_2=1;
+      uint8_t year, month, date, hours, minutes, seconds;
+      String line;
+          dataReceived = SerialBT.readString();
+          if (function("Manual",dataReceived))
+          {
+              Serial.println("Manual mode");
+              while(1)
+              {
+                  dataReceived = SerialBT.readString();
+                  if (function(temp,dataReceived))
+                  {
+                      // Read data from Bluetooth and print it to the serial monitor
+                      Serial.println("Received: " + dataReceived);
+                      SD_card_read_function();//Reading data into file............
+                      dataReceived="0";
+                  } 
+                  if(function("ON",dataReceived))
+                  {
+                      digitalWrite(26, LOW);
+                      digitalWrite(27, HIGH);
+                  }
+                  else if(function("OFF",dataReceived))
+                  {
+                      digitalWrite(26, LOW);
+                      digitalWrite(27, LOW);
+                  }
+                  else if(function("Auto",dataReceived))
+                  break;
+              }
+          }
+        if (function("Auto",dataReceived))
+        {
+          Serial.println("Auto mode");
+          while(1)
+          {
+                  
+                  dataReceived = SerialBT.readString();
+                  if (function("Manual",dataReceived))
+                  break;
+
+                  soilMoistureValue = analogRead(soilMoisturePin);
+                  value=100-((soilMoistureValue/4095)*100);
+                  Serial.println(value);
+                  if(value<50)
+                  {
+                      if(t1==0)
+                      {
+			//start Motor();
+                        digitalWrite(26, LOW);
+                        digitalWrite(27, HIGH);
+                        readRTCTime(&year, &month, &date, &hours, &minutes, &seconds);
+                        m1=minutes;
+                        h1=hours;
+                        s1=seconds;
+                        line=integer_to_string(year,month,date,hours,minutes,seconds);
+                        SD_card_write_function("ON_Time:......");
+                        SD_card_write_function(line);//writing data into file...
+                        t2=0;
+                      }
+                    t1=1;
+
+                  }
+                  if(value>90)
+                  {
+                      if(t2==0)
+                      {
+                        //stopMotor();
+                        digitalWrite(26, LOW);
+                        digitalWrite(27, LOW);
+                        
+                        readRTCTime(&year, &month, &date, &hours, &minutes, &seconds);
+                        m2=minutes;
+                        h2=hours;
+                        s2=seconds;
+                        line=integer_to_string(year,month,date,hours,minutes,seconds);
+                        SD_card_write_function("OFF_Time:.....");
+                        SD_card_write_function(line);//writing data into file.................................
+                        t2=1;
+                        if(h1>h2)
+                        h3=(24-h1)+h2;
+                        else
+                        h3=h2-h1;
+
+                        if(m1>m2)
+                        m3=m1-m2;
+                        else
+                        m3=m2-m1;
+
+                        if(s1>s2)
+                        s3=s1-s2;
+                        else
+                        s3=s2-s1;
+        
+                        SD_card_write_function("Total_Time:.......");
+                        line=String(h3)+":"+String(m3)+":"+String(s3);
+                        SD_card_write_function(line);
+                      }
+                    t1=0;
+                  }
+                  if (function(temp,dataReceived))
+                  {
+                      // Read data from Bluetooth and print it to the serial monitor
+                      Serial.println("Received: " + dataReceived);
+                      SD_card_read_function();//Reading data into file.............................
+                      dataReceived="0";
+                  } 
+                  delay(1000); // Wait for 1 second before repeating
+          }
+
+        }
+}
+
+void readRTCTime(uint8_t* year, uint8_t* month, uint8_t* date, uint8_t* hours, uint8_t* minutes, uint8_t* seconds) 
+{
+      Wire.beginTransmission(RTC_ADDR);
+      Wire.write(0x00); // Start reading from register 0x00
+      Wire.endTransmission();
+
+      Wire.requestFrom(RTC_ADDR, 7); // Request 7 bytes of data from the RTC
+
+      // Parse the received data
+      *seconds = bcd2dec(Wire.read() & 0x7F);
+      *minutes = bcd2dec(Wire.read());
+      *hours = bcd2dec(Wire.read() & 0x3F);
+      Wire.read(); // Ignore the day/date register
+      *date = bcd2dec(Wire.read());
+      *month = bcd2dec(Wire.read());
+      *year = bcd2dec(Wire.read());
+}
+
+uint8_t bcd2dec(uint8_t val) 
+{
+      return (val >> 4) * 10 + (val & 0x0F);// Hexadecimal to Decimal............
+}
+
+uint8_t decToBcd(uint8_t val) 
+{
+      return ((val / 10 * 16) + (val % 10)); // Convert decimal to hexa.........
+}
+
+void setDS1307Time(uint8_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute, uint8_t second) 
+{
+      Wire.beginTransmission(RTC_ADDR); // Begin communication with DS1307 RTC
+      Wire.write(0); // Set memory pointer to the seconds register
+      Wire.write(decToBcd(second)); // Write seconds in BCD format
+      Wire.write(decToBcd(minute)); // Write minutes in BCD format
+      Wire.write(decToBcd(hour));   // Write hours in BCD format
+      Wire.write(decToBcd(00));
+      Wire.write(decToBcd(day));    // Write day in BCD format
+      Wire.write(decToBcd(month));  // Write month in BCD format
+      Wire.write(decToBcd(year));   // Write year in BCD format
+      Wire.endTransmission();       // Stop communication with DS1307 RTC
+}
+void print_rtc_serial_terminal(int year,int month,int date,int hours,int minutes,int seconds)
+{
+        Serial.print(year);
+        Serial.print("/");
+        Serial.print(month);
+        Serial.print("/");
+        Serial.print(date);
+        Serial.print(" ");
+        Serial.print(hours);
+        Serial.print(":");
+        Serial.print(minutes);
+        Serial.print(":");
+        Serial.print(seconds);
+        Serial.print("\n");
+}
+
+///////////////////////////////////
+
+
+// Write data to the file
+void SD_card_write_function(String data)
+{
+      file.println(data);
+        
+}
+
+void SD_card_read_function(void)
+{
+   Serial.println("inside the read function");
+  file = SD.open("/TEAM_A.txt");
+        if (!file)
+        {
+          Serial.println("Failed to open file for reading");
+          return;
+        }
+        while (file.available()) 
+        {
+          data=file.readStringUntil('\n');
+          Serial.println(data);
+          SerialBT.println(data);
+          delay(50);
+        }
+  file.close();
+  file = SD.open("/TEAM_A.txt", FILE_APPEND_PLUS);
+        if (!file) {
+          Serial.println("Failed to create file");
+          return;
+        }
+}
+
+String integer_to_string(int year,int month,int date,int hours,int minutes,int seconds)
+{
+      String int_data="Date: "+String(year) + "/" + String(month) + "/" + String(date) + "  Time:- " + String(hours) + ":" + String(minutes) + ":" + String(seconds);
+      return int_data;
+}
+
+int function(String temp,String dataReceived)
+{
+   int i=0;
+   int length=temp.length();
+   for(i=0;i<length;i++)
+   {
+      if(temp[i]!=dataReceived[i])
+      break;
+   }
+   if(i==length)
+   return 1;
+   else
+   return 0;
+
+}
+
+void startMotor()
+{
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  digitalWrite(MOTOR_CS_PIN, LOW);
+  // Send command to start the motor via SPI
+  digitalWrite(MOTOR_CS_PIN, HIGH);
+}
+void stopMotor()
+{
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  digitalWrite(MOTOR_CS_PIN, LOW);
+  // Send command to stop the motor via SPI
+  digitalWrite(MOTOR_CS_PIN, HIGH);
+}
